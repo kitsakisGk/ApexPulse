@@ -21,6 +21,34 @@ dashboard.
 | Frontend | Next.js + Tailwind CSS |
 | Packaging | uv, Docker Compose, GitHub Actions |
 
+## Infrastructure
+
+Requires Docker Desktop (or any Docker Engine with Compose v2).
+
+```bash
+make up              # start redpanda + redis, wait for healthchecks
+make ps              # service status
+make topics          # list the bootstrapped kafka topics
+make down            # stop the stack (volumes preserved)
+make clean           # stop and destroy volumes
+```
+
+`make up` blocks until every healthcheck reports healthy, then a one-shot
+`redpanda-init` container creates the telemetry and prediction topics.
+
+| Service | Host endpoint | Purpose |
+| --- | --- | --- |
+| Redpanda | `localhost:19092` | Kafka API — telemetry and prediction topics |
+| Redpanda Admin | `localhost:9644` | Admin API and Prometheus metrics |
+| Redis | `localhost:6379` | Live match state store |
+| Console | http://localhost:8080 | Topic and message browser |
+
+To confirm host-side reachability before running a producer or consumer:
+
+```bash
+uv run python scripts/wait_for_services.py
+```
+
 ## Development
 
 Requires [uv](https://docs.astral.sh/uv/) and Python 3.12.
@@ -33,6 +61,8 @@ uv run pytest                 # run the test suite
 uv run ruff check .           # lint
 uv run mypy                   # type-check
 ```
+
+Or run every gate at once with `make check`.
 
 ## Layout
 

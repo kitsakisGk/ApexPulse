@@ -1,0 +1,117 @@
+name: apexpulse
+
+services:
+  # ---------------------------------------------------------------------------
+  # Redpanda — Kafka-API-compatible event broker carrying raw telemetry ticks
+  # and emitted win-probability predictions.
+  # ---------------------------------------------------------------------------
+  redpanda:
+    image: redpandadata/redpanda:v24.2.7
+    container_name: apexpulse-redpanda
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp=1
+      - --memory=1G
+      - --reserve-memory=0M
+      - --node-id=0
+      - --check=false
+      # Advertise a distinct listener per network path: `redpanda:9092` resolves
+      # inside the compose network, `localhost:19092` from the host toolchain.
+      - --kafka-addr=INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:19092
+      - --advertise-kafka-addr=INTERNAL://redpanda:9092,EXTERNAL://localhost:19092
+      - --pandaproxy-addr=INTERNAL://0.0.0.0:8082,EXTERNAL://0.0.0.0:18082
+      - --advertise-pandaproxy-addr=INTERNAL://redpanda:8082,EXTERNAL://localhost:18082
+      - --rpc-addr=0.0.0.0:33145
+      - --advertise-rpc-addr=redpanda:33145
+    ports:
+      - "19092:19092"   # Kafka API (host)
+      - "18082:18082"   # HTTP proxy (host)
+      - "9644:9644"     # Admin API / Prometheus metrics
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+    healthcheck:
+      # `cluster health` reports healthy only once the controller has a leader,
+      # so dependents never start against a broker that cannot serve writes.
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Topic bootstrap — creates the telemetry and prediction topics, then exits.
+  # Dependents gate on `service_completed_successfully`.
+  # ---------------------------------------------------------------------------
+  redpanda-init:
+    image: redpandadata/redpanda:v24.2.7
+    container_name: apexpulse-redpanda-init
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command: |
+      "
+      set -euo pipefail
+      rpk topic create apexpulse.telemetry.ticks \
+        --brokers redpanda:9092 --partitions 3 --replicas 1 || true
+      rpk topic create apexpulse.predictions \
+        --brokers redpanda:9092 --partitions 3 --replicas 1 || true
+      rpk topic list --brokers redpanda:9092
+      "
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # Redis — live match state store holding the current snapshot per match.
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7.4-alpine
+    container_name: apexpulse-redis
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Redpanda Console — web UI for inspecting topics, partitions, and messages.
+  # ---------------------------------------------------------------------------
+  console:
+    image: redpandadata/console:v2.7.2
+    container_name: apexpulse-console
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+      KAFKA_SCHEMAREGISTRY_ENABLED: "false"
+      SERVER_LISTENPORT: "8080"
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+volumes:
+  redpanda-data:
+    name: apexpulse-redpanda-data
+  redis-data:
+    name: apexpulse-redis-data
+
+networks:
+  default:
+    name: apexpulse-net
