@@ -26,3 +26,25 @@ def test_environment_overrides_are_applied(monkeypatch) -> None:
     monkeypatch.setenv("APEXPULSE_TICK_RATE_HZ", "32")
 
     assert Settings().tick_rate_hz == 32.0
+
+
+def test_default_backends_require_no_external_services() -> None:
+    """The out-of-the-box configuration must run on a machine without Docker."""
+    settings = Settings()
+
+    assert settings.broker_backend == "memory"
+    assert settings.state_backend == "sqlite"
+    assert settings.requires_external_services is False
+
+
+def test_selecting_kafka_or_redis_flags_external_dependencies() -> None:
+    assert Settings(broker_backend="kafka").requires_external_services is True
+    assert Settings(state_backend="redis").requires_external_services is True
+
+
+def test_invalid_backend_is_rejected_at_startup() -> None:
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Settings(broker_backend="rabbitmq")  # type: ignore[arg-type]

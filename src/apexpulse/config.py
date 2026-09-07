@@ -9,11 +9,18 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, RedisDsn
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+BrokerBackend = Literal["memory", "kafka"]
+"""Event transport. ``memory`` needs no services; ``kafka`` targets Redpanda."""
+
+StateBackend = Literal["memory", "sqlite", "redis"]
+"""Live-state store. ``memory`` is per-process, ``sqlite`` persists to disk."""
 
 
 class Settings(BaseSettings):
@@ -29,6 +36,19 @@ class Settings(BaseSettings):
     # -- General ------------------------------------------------------------
     environment: str = Field(default="local", description="Deployment environment name.")
     log_level: str = Field(default="INFO", description="Root logging level.")
+
+    # -- Backend selection --------------------------------------------------
+    # ApexPulse runs without any external services so the pipeline is testable on
+    # a bare machine. Point these at `kafka`/`redis` once the stack is available;
+    # no application code changes, only configuration.
+    broker_backend: BrokerBackend = Field(
+        default="memory",
+        description="Event transport implementation.",
+    )
+    state_backend: StateBackend = Field(
+        default="sqlite",
+        description="Live match-state store implementation.",
+    )
 
     # -- Kafka / Redpanda ---------------------------------------------------
     kafka_bootstrap_servers: str = Field(
@@ -74,10 +94,19 @@ class Settings(BaseSettings):
         default=PROJECT_ROOT / "data" / "processed" / "apexpulse.duckdb",
         description="DuckDB database file for historical telemetry.",
     )
+    sqlite_state_path: Path = Field(
+        default=PROJECT_ROOT / "data" / "processed" / "state.sqlite3",
+        description="SQLite database backing the `sqlite` state backend.",
+    )
 
     # -- API ----------------------------------------------------------------
     api_host: str = Field(default="0.0.0.0", description="Bind address for the FastAPI server.")
     api_port: int = Field(default=8000, ge=1, le=65535, description="FastAPI server port.")
+
+    @property
+    def requires_external_services(self) -> bool:
+        """Whether the selected backends need Redpanda or Redis running."""
+        return self.broker_backend == "kafka" or self.state_backend == "redis"
 
 
 @lru_cache(maxsize=1)

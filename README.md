@@ -13,17 +13,41 @@ dashboard.
 
 | Layer | Technology |
 | --- | --- |
-| Ingestion & streaming | Redpanda (Kafka API) |
-| Live state | Redis |
+| Ingestion & streaming | Redpanda (Kafka API), or an in-process broker |
+| Live state | Redis, or SQLite |
 | Historical storage | DuckDB + Parquet |
 | ML inference | XGBoost |
 | API & broadcast | FastAPI + WebSockets |
 | Frontend | Next.js + Tailwind CSS |
 | Packaging | uv, Docker Compose, GitHub Actions |
 
-## Infrastructure
+## Running modes
 
-Requires Docker Desktop (or any Docker Engine with Compose v2).
+ApexPulse selects its transport and state store at startup, so the entire pipeline
+runs with **no external services** — useful on machines without Docker, and the
+reason the test suite needs no containers.
+
+| | `broker_backend` | `state_backend` | Requires |
+| --- | --- | --- | --- |
+| **Standalone** (default) | `memory` | `sqlite` | nothing |
+| **Full stack** | `kafka` | `redis` | Redpanda + Redis |
+
+Application code is written against the `EventBroker` and `StateStore` interfaces
+only, so switching is purely configuration:
+
+```bash
+uv run apexpulse doctor    # verify the configured backends are reachable
+```
+
+```bash
+# opt into the container stack
+APEXPULSE_BROKER_BACKEND=kafka APEXPULSE_STATE_BACKEND=redis uv run apexpulse doctor
+```
+
+## Infrastructure (optional)
+
+The container stack is only needed for the `kafka`/`redis` backends. Requires
+Docker Desktop or any Docker Engine with Compose v2.
 
 ```bash
 make up              # start redpanda + redis, wait for healthchecks
@@ -68,10 +92,14 @@ Or run every gate at once with `make check`.
 
 ```
 src/apexpulse/
+├── broker/      # pluggable transport: in-memory | kafka
+│   ├── base.py      # EventBroker interface
+│   ├── memory.py    # asyncio-queue implementation
+│   └── kafka.py     # confluent-kafka implementation
 ├── schemas/     # pydantic domain models
-├── producer/    # telemetry replay simulator + kafka producer
+├── producer/    # telemetry replay simulator + event publisher
 ├── stream/      # streaming consumer + windowed aggregation
-├── storage/     # redis live state + duckdb historical sink
+├── storage/     # state store (memory | sqlite | redis) + duckdb sink
 ├── features/    # real-time feature extraction
 ├── ml/          # offline training and calibration
 ├── inference/   # low-latency scoring worker
