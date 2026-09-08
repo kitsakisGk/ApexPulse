@@ -100,5 +100,134 @@ def doctor() -> None:
     raise typer.Exit(0 if ok else 1)
 
 
+@app.command()
+def simulate(
+    seed: int = typer.Option(42, help="RNG seed; the same seed replays the same match."),
+    tick_rate: float = typer.Option(8.0, help="Snapshots emitted per simulated second."),
+    map_name: str = typer.Option("de_mirage", help="Map to play."),
+) -> None:
+    """Simulate one match and print a summary of what happened.
+
+    Runs entirely in-process — no broker, no services — so it is the quickest way
+    to see the telemetry the pipeline is built around.
+    """
+    from collections import Counter
+
+    from apexpulse.producer import MatchSimulator
+    from apexpulse.schemas.enums import MapName
+    from apexpulse.schemas.events import (
+        BombPlantedEvent,
+        KillEvent,
+        MatchEndEvent,
+        RoundEndEvent,
+    )
+
+    simulator = MatchSimulator(seed=seed, tick_rate_hz=tick_rate, map_name=MapName(map_name))
+
+    counts: Counter[str] = Counter()
+    reasons: Counter[str] = Counter()
+    rounds: list[RoundEndEvent] = []
+    plants = kills = 0
+    final: MatchEndEvent | None = None
+
+    for event in simulator.run():
+        counts[event.event_type.value] += 1
+        if isinstance(event, RoundEndEvent):
+            rounds.append(event)
+            reasons[event.reason.value] += 1
+        elif isinstance(event, BombPlantedEvent):
+            plants += 1
+        elif isinstance(event, KillEvent):
+            kills += 1
+        elif isinstance(event, MatchEndEvent):
+            final = event
+
+    total = sum(counts.values())
+    typer.echo(f"\nMatch {simulator.match_id} on {map_name}  (seed={seed}, {tick_rate} Hz)")
+    typer.echo("=" * 58)
+
+    if final is not None:
+        typer.echo(f"  Final score    CT {final.score_ct} - {final.score_t} T")
+        typer.echo(f"  Winner         {final.winner.value}")
+
+    typer.echo(f"  Rounds played  {len(rounds)}")
+    typer.echo(f"  Total events   {total:,}  ({counts['tick']:,} ticks, {kills} kills)")
+
+    if rounds:
+        ct_wins = sum(1 for event in rounds if event.winner.value == "CT")
+        typer.echo(f"  CT win rate    {ct_wins / len(rounds):.1%}")
+        typer.echo(f"  Plant rate     {plants / len(rounds):.1%}")
+
+    typer.echo("\n  Round outcomes")
+    for reason, count in reasons.most_common():
+        bar = "#" * count
+        typer.echo(f"    {reason:16} {count:3}  {bar}")
+
+    typer.echo("\n  Scoreline")
+    score_ct = score_t = 0
+    for event in rounds:
+        marker = "CT" if event.score_ct > score_ct else "T "
+        score_ct, score_t = event.score_ct, event.score_t
+        typer.echo(
+            f"    R{event.round_number:<3} {marker} wins  {score_ct:>2}-{score_t:<2}"
+            f"  ({event.reason.value})"
+        )
+    typer.echo("")
+
+
+@app.command()
+def replay(
+    seed: int = typer.Option(42, help="RNG seed."),
+    tick_rate: float = typer.Option(8.0, help="Snapshots per simulated second."),
+    speed: float = typer.Option(
+        0.0, help="Wall-clock multiplier; 1.0 is real time, 0.0 is as fast as possible."
+    ),
+    max_events: int = typer.Option(0, help="Stop after N events; 0 means run the full match."),
+) -> None:
+    """Publish a simulated match to the broker and consume it back.
+
+    Exercises the real path a live match takes — producer, transport, consumer —
+    against whichever backend is configured.
+    """
+    from apexpulse.broker import create_broker
+    from apexpulse.producer import MatchSimulator, TelemetryReplayer
+    from apexpulse.schemas.events import parse_event
+
+    configure_logging()
+    settings = get_settings()
+    typer.echo(f"broker: {settings.broker_backend}   topic: {settings.kafka_telemetry_topic}\n")
+
+    async def _run() -> None:
+        received: list[str] = []
+
+        async with create_broker(settings) as broker:
+
+            async def _consume() -> None:
+                async for message in broker.consume(
+                    settings.kafka_telemetry_topic, group="cli-replay"
+                ):
+                    received.append(parse_event(message.value).event_type.value)
+
+            consumer = asyncio.create_task(_consume())
+            await asyncio.sleep(0.05)
+
+            replayer = TelemetryReplayer(broker=broker, settings=settings, speed=speed)
+            stats = await replayer.replay(
+                MatchSimulator(seed=seed, tick_rate_hz=tick_rate),
+                max_events=max_events or None,
+            )
+            await asyncio.sleep(0.1)
+            consumer.cancel()
+
+        typer.echo(f"  published   {stats.events_published:,} events")
+        typer.echo(f"  consumed    {len(received):,} events")
+        typer.echo(f"  ticks       {stats.ticks_published:,}")
+        typer.echo(f"  rounds      {stats.rounds_completed}")
+        typer.echo(f"  duration    {stats.duration_seconds:.2f}s")
+        typer.echo(f"  throughput  {stats.events_per_second:,.0f} events/s")
+
+    asyncio.run(_run())
+
+
 if __name__ == "__main__":  # pragma: no cover
     app()

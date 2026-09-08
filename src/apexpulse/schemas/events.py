@@ -7,8 +7,8 @@ inspecting the JSON itself.
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Annotated, Literal, Self, TypeAlias
+from datetime import datetime  # noqa: TC003 - pydantic resolves field types at runtime
+from typing import Annotated, Literal, Self
 
 from pydantic import Field, TypeAdapter, model_validator
 
@@ -68,9 +68,7 @@ class KillEvent(BaseEvent):
 
     event_type: Literal[EventType.KILL] = EventType.KILL
     round_number: int = Field(ge=1, le=64)
-    killer_id: str | None = Field(
-        default=None, description="Absent for suicides and world damage."
-    )
+    killer_id: str | None = Field(default=None, description="Absent for suicides and world damage.")
     victim_id: str = Field(min_length=1, max_length=64)
     assister_id: str | None = None
     weapon: Weapon
@@ -147,7 +145,7 @@ class MatchEndEvent(BaseEvent):
         return self
 
 
-TelemetryEvent: TypeAlias = Annotated[
+TelemetryEvent = Annotated[
     MatchStartEvent
     | RoundStartEvent
     | TickEvent

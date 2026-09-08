@@ -44,6 +44,21 @@ uv run apexpulse doctor    # verify the configured backends are reachable
 APEXPULSE_BROKER_BACKEND=kafka APEXPULSE_STATE_BACKEND=redis uv run apexpulse doctor
 ```
 
+## Try it
+
+No services required — these run on the standalone backends.
+
+```bash
+uv run apexpulse doctor                    # verify the configured backends
+uv run apexpulse simulate --seed 7         # simulate a match, print the scoreline
+uv run apexpulse replay --tick-rate 4      # publish through the broker and read it back
+uv run apexpulse replay --speed 1.0        # replay in real time, as a live match would arrive
+```
+
+`simulate` runs the match generator in-process and summarises it. `replay` exercises
+the real path — producer, transport, consumer — against whichever backend is
+configured, reporting published vs. consumed counts and throughput.
+
 ## Infrastructure (optional)
 
 The container stack is only needed for the `kafka`/`redis` backends. Requires

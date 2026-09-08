@@ -24,6 +24,7 @@ from apexpulse.schemas import (
     constants,
     weapons_for,
 )
+from apexpulse.schemas.enums import MapName
 from apexpulse.schemas.events import (
     BombPlantedEvent,
     KillEvent,
@@ -34,7 +35,6 @@ from apexpulse.schemas.events import (
     parse_event,
     serialise_event,
 )
-from apexpulse.schemas.enums import MapName
 
 # -- Fixtures -----------------------------------------------------------------
 
@@ -68,9 +68,7 @@ def make_state(**overrides: object) -> MatchState:
     fields: dict[str, object] = {
         "match_id": "m-1",
         "map_name": MapName.MIRAGE,
-        "round_state": RoundState(
-            round_number=1, phase=RoundPhase.LIVE, seconds_remaining=90.0
-        ),
+        "round_state": RoundState(round_number=1, phase=RoundPhase.LIVE, seconds_remaining=90.0),
         "players": players,
         "economy_ct": TeamEconomy(team=Team.CT, money=20_000, equipment_value=15_000),
         "economy_t": TeamEconomy(team=Team.T, money=18_000, equipment_value=14_000),
@@ -257,7 +255,7 @@ def test_players_on_filters_by_side() -> None:
 
 
 def test_tick_state_must_belong_to_the_event_match() -> None:
-    with pytest.raises(ValidationError, match="state.match_id"):
+    with pytest.raises(ValidationError, match=r"state\.match_id"):
         TickEvent(match_id="other", sequence=1, state=make_state())
 
 
