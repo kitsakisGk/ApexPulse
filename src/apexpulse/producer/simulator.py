@@ -233,16 +233,21 @@ class MatchSimulator:
 
     def _buy_phase(self, team: Team) -> None:
         """Spend each player's money on the best loadout they can afford."""
-        affordable = sorted(
+        purchasable = sorted(
             (weapon for weapon in weapons_for(team) if WEAPON_COST[weapon] > 0),
             key=lambda weapon: WEAPON_COST[weapon],
             reverse=True,
         )
+        # Every player spawns with their side's free pistol, so nobody ever enters
+        # a round holding only a knife — a pistol round would otherwise leave the
+        # weapon slot empty.
+        sidearm = Weapon.USP if team is Team.CT else Weapon.GLOCK
 
         for player in self._team(team):
             budget = player.money
+            player.weapon = sidearm
 
-            for weapon in affordable:
+            for weapon in purchasable:
                 cost = WEAPON_COST[weapon]
                 # Keep enough back for armour; a rifle with no kevlar is a bad buy.
                 if cost <= budget - ARMOUR_BUY_THRESHOLD:
@@ -326,9 +331,11 @@ class MatchSimulator:
 
         victim.health = 0
         victim.deaths += 1
+        # A dead player carries nothing; the schema enforces this too.
         victim.armour = 0
         victim.has_helmet = False
         victim.has_defuse_kit = False
+        victim.weapon = None
         killer.kills += 1
         killer.damage_dealt += constants.MAX_HEALTH
         self._award(killer, constants.KILL_REWARD_DEFAULT)

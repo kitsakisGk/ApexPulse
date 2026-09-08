@@ -359,3 +359,46 @@ def test_replay_stats_report_zero_rate_before_any_run() -> None:
     from apexpulse.producer import ReplayStats
 
     assert ReplayStats().events_per_second == 0.0
+
+
+def test_every_living_player_carries_a_weapon(match: list) -> None:
+    """Regression: pistol rounds left the weapon slot empty.
+
+    With $800 start money and a $1000 armour reserve, no purchasable weapon was
+    affordable, so players entered round 1 holding nothing. Free sidearms are now
+    always equipped.
+    """
+    for event in match:
+        if not isinstance(event, TickEvent):
+            continue
+        for player in event.state.players:
+            if player.is_alive:
+                assert player.primary_weapon is not None, (
+                    f"{player.player_id} is alive with no weapon "
+                    f"in round {event.state.round_state.round_number}"
+                )
+
+
+def test_dead_players_carry_nothing(match: list) -> None:
+    for event in match:
+        if not isinstance(event, TickEvent):
+            continue
+        for player in event.state.players:
+            if not player.is_alive:
+                assert player.primary_weapon is None
+                assert player.armour == 0
+                assert player.has_defuse_kit is False
+
+
+def test_pistol_round_players_hold_their_side_sidearm() -> None:
+    """Round 1 gives everyone the free pistol for their side."""
+    from apexpulse.schemas.enums import Weapon
+
+    for event in MatchSimulator(seed=21, tick_rate_hz=1.0).run():
+        if isinstance(event, TickEvent) and event.state.round_state.round_number == 1:
+            weapons = {p.team: p.primary_weapon for p in event.state.players}
+            assert weapons[Team.CT] is Weapon.USP
+            assert weapons[Team.T] is Weapon.GLOCK
+            return
+
+    pytest.fail("no round-1 tick was emitted")
