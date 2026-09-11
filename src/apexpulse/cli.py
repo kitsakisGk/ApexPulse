@@ -229,5 +229,81 @@ def replay(
     asyncio.run(_run())
 
 
+@app.command()
+def live(
+    seed: int = typer.Option(42, help="RNG seed."),
+    tick_rate: float = typer.Option(8.0, help="Snapshots per simulated second."),
+    speed: float = typer.Option(0.0, help="Wall-clock multiplier; 1.0 is real time."),
+    max_events: int = typer.Option(2000, help="Stop after N events; 0 runs the full match."),
+) -> None:
+    """Run the full pipeline and print the live match state as it updates.
+
+    Producer to broker to consumer to state store, then reads the stored snapshot
+    back — the same path a real match takes.
+    """
+    from apexpulse.broker import create_broker
+    from apexpulse.producer import MatchSimulator, TelemetryReplayer
+    from apexpulse.storage import create_state_store
+    from apexpulse.stream import MatchTracker, TelemetryConsumer
+
+    configure_logging()
+    settings = get_settings()
+
+    async def _run() -> None:
+        async with create_broker(settings) as broker, create_state_store(settings) as store:
+            tracker = MatchTracker(store=store, settings=settings)
+            consumer = TelemetryConsumer(broker=broker, settings=settings)
+            consumer.on(None, tracker.handle)
+
+            task = asyncio.create_task(consumer.run(max_events=max_events or None))
+            await asyncio.sleep(0.05)
+
+            replayer = TelemetryReplayer(broker=broker, settings=settings, speed=speed)
+            await replayer.replay(
+                MatchSimulator(seed=seed, tick_rate_hz=tick_rate),
+                max_events=max_events or None,
+            )
+            await asyncio.sleep(0.2)
+            consumer.stop()
+            stats = await task
+
+            typer.echo("")
+            typer.echo(f"  consumed    {stats.events_consumed:,} events")
+            typer.echo(f"  malformed   {stats.events_failed}")
+            typer.echo(f"  handler err {stats.handler_errors}")
+
+            for match_id in await tracker.live_match_ids():
+                snapshot = await tracker.snapshot(match_id)
+                if snapshot is None:
+                    continue
+                state = snapshot["state"]
+                round_state = state["round_state"]
+                momentum = snapshot["momentum"]
+
+                typer.echo(f"\n  Live state for {match_id}")
+                typer.echo("  " + "-" * 46)
+                typer.echo(f"    score          CT {state['score_ct']} - {state['score_t']} T")
+                typer.echo(
+                    f"    round          {round_state['round_number']}  ({round_state['phase']})"
+                )
+                typer.echo(f"    clock          {round_state['seconds_remaining']:.1f}s")
+                typer.echo(
+                    f"    bomb           {'PLANTED' if round_state['bomb_planted'] else '-'}"
+                )
+                typer.echo(f"    alive          CT {state['alive_ct']} vs T {state['alive_t']}")
+                typer.echo(f"    man advantage  {state['man_advantage']:+d}")
+                typer.echo(
+                    f"    economy        CT ${state['economy_ct']['money']:,}"
+                    f"  vs  T ${state['economy_t']['money']:,}"
+                )
+                typer.echo(
+                    f"    momentum       kill delta {momentum['kill_delta']:+d}"
+                    f"  over {momentum['window_seconds']}s"
+                )
+            typer.echo("")
+
+    asyncio.run(_run())
+
+
 if __name__ == "__main__":  # pragma: no cover
     app()
