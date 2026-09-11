@@ -276,30 +276,38 @@ def live(
                 snapshot = await tracker.snapshot(match_id)
                 if snapshot is None:
                     continue
-                state = snapshot["state"]
-                round_state = state["round_state"]
-                momentum = snapshot["momentum"]
+
+                state = snapshot.state
+                round_state = state.round_state
+                momentum = snapshot.momentum
+                history = await tracker.history(match_id)
 
                 typer.echo(f"\n  Live state for {match_id}")
                 typer.echo("  " + "-" * 46)
-                typer.echo(f"    score          CT {state['score_ct']} - {state['score_t']} T")
+                typer.echo(f"    score          CT {state.score_ct} - {state.score_t} T")
                 typer.echo(
-                    f"    round          {round_state['round_number']}  ({round_state['phase']})"
+                    f"    round          {round_state.round_number}  ({round_state.phase.value})"
                 )
-                typer.echo(f"    clock          {round_state['seconds_remaining']:.1f}s")
+                typer.echo(f"    clock          {round_state.seconds_remaining:.1f}s")
+                typer.echo(f"    bomb           {'PLANTED' if round_state.bomb_planted else '-'}")
+                typer.echo(f"    alive          CT {state.alive_ct} vs T {state.alive_t}")
+                typer.echo(f"    man advantage  {state.man_advantage:+d}")
                 typer.echo(
-                    f"    bomb           {'PLANTED' if round_state['bomb_planted'] else '-'}"
-                )
-                typer.echo(f"    alive          CT {state['alive_ct']} vs T {state['alive_t']}")
-                typer.echo(f"    man advantage  {state['man_advantage']:+d}")
-                typer.echo(
-                    f"    economy        CT ${state['economy_ct']['money']:,}"
-                    f"  vs  T ${state['economy_t']['money']:,}"
+                    f"    economy        CT ${state.economy_ct.money:,}"
+                    f"  vs  T ${state.economy_t.money:,}"
                 )
                 typer.echo(
-                    f"    momentum       kill delta {momentum['kill_delta']:+d}"
-                    f"  over {momentum['window_seconds']}s"
+                    f"    momentum       kill delta {momentum.kill_delta:+d}"
+                    f"  over {momentum.window_seconds}s"
                 )
+
+                streak = history.current_streak()
+                if streak is not None:
+                    side, length = streak
+                    typer.echo(
+                        f"    streak         {side.value} has won {length} in a row"
+                        f"  ({history.rounds_played} rounds recorded)"
+                    )
             typer.echo("")
 
     asyncio.run(_run())

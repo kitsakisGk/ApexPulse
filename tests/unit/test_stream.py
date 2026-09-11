@@ -363,9 +363,9 @@ async def test_the_tracker_persists_a_snapshot_per_tick() -> None:
         snapshot = await tracker.snapshot("apex-001")
 
     assert snapshot is not None
-    assert snapshot["match_id"] == "apex-001"
-    assert "state" in snapshot
-    assert "momentum" in snapshot
+    assert snapshot.match_id == "apex-001"
+    assert snapshot.state.match_id == "apex-001"
+    assert snapshot.momentum is not None
 
 
 async def test_the_stored_snapshot_carries_windowed_momentum() -> None:
@@ -386,8 +386,8 @@ async def test_the_stored_snapshot_carries_windowed_momentum() -> None:
         snapshot = await tracker.snapshot(tick.match_id)
 
     assert snapshot is not None
-    assert snapshot["momentum"]["kills_ct"] == 1
-    assert snapshot["momentum"]["headshot_rate"] == 1.0
+    assert snapshot.momentum.kills_ct == 1
+    assert snapshot.momentum.headshot_rate == 1.0
 
 
 async def test_live_match_ids_lists_tracked_matches() -> None:
@@ -408,7 +408,7 @@ async def test_a_finished_match_releases_its_window() -> None:
     async with InMemoryStateStore() as store:
         tracker = MatchTracker(store=store, settings=settings)
         tracker.window_for("m-1").observe(make_kill(1))
-        assert "m-1" in tracker._windows
+        assert tracker.window_for("m-1").kill_count == 1
 
         await tracker.handle(
             MatchEndEvent(
@@ -421,7 +421,7 @@ async def test_a_finished_match_releases_its_window() -> None:
             )
         )
 
-        assert "m-1" not in tracker._windows
+        assert tracker.window_for("m-1").kill_count == 0, "the window was released"
 
 
 # -- End to end ---------------------------------------------------------------
@@ -450,4 +450,4 @@ async def test_a_replayed_match_flows_through_to_stored_state() -> None:
     assert stats.events_consumed == 400
     assert stats.events_failed == 0
     assert snapshot is not None
-    assert snapshot["state"]["match_id"] == "apex-001"
+    assert snapshot.state.match_id == "apex-001"
