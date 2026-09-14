@@ -76,6 +76,12 @@ PLANT_WINDOW_END = 0.65
 POST_PLANT_DEFUSE_RATE = 0.45
 HEADSHOT_RATE = 0.42
 
+TRADE_DAMAGE_RATE = 0.65
+"""Share of duels in which the winner also takes damage."""
+
+TRADE_DAMAGE_RANGE = (15, 75)
+"""Inclusive damage bounds applied to a duel winner."""
+
 ARMOUR_BUY_THRESHOLD = 1_000
 KIT_BUY_THRESHOLD = 3_000
 
@@ -328,6 +334,14 @@ class MatchSimulator:
         ct_wins = self._rng.random() < self._duel_win_probability()
         killer = self._rng.choice(ct_alive if ct_wins else t_alive)
         victim = self._rng.choice(t_alive if ct_wins else ct_alive)
+
+        # The winner of a duel usually takes damage too. Without this every living
+        # player sits at exactly 100 HP, making team health a perfect multiple of
+        # the alive count and the health feature redundant with it.
+        if self._rng.random() < TRADE_DAMAGE_RATE:
+            damage = self._rng.randint(*TRADE_DAMAGE_RANGE)
+            killer.health = max(1, killer.health - damage)
+            victim.damage_dealt += min(damage, constants.MAX_HEALTH)
 
         victim.health = 0
         victim.deaths += 1

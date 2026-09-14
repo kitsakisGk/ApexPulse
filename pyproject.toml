@@ -50,6 +50,7 @@ dev = [
     "types-redis>=4.6",
     "pyyaml>=6.0",
     "types-pyyaml>=6.0",
+    "pandas-stubs>=2.2",
 ]
 
 [build-system]
