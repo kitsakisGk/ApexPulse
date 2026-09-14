@@ -313,5 +313,54 @@ def live(
     asyncio.run(_run())
 
 
+@app.command()
+def dataset(
+    matches: int = typer.Option(20, help="Matches to simulate."),
+    tick_rate: float = typer.Option(4.0, help="Snapshots per simulated second."),
+    seed: int = typer.Option(0, help="First RNG seed; each match uses seed + n."),
+    output: str = typer.Option("", help="Parquet destination; defaults to data/processed."),
+) -> None:
+    """Generate a labelled training dataset and write it to DuckDB and Parquet.
+
+    Each tick is stored with the outcome of the round it belonged to, which is the
+    supervised label the win-probability model learns from.
+    """
+    from pathlib import Path
+
+    from apexpulse.producer import MatchSimulator
+    from apexpulse.storage import DuckDBSink
+
+    configure_logging()
+    settings = get_settings()
+    destination = Path(output) if output else settings.data_dir / "processed" / "training.parquet"
+
+    async def _run() -> None:
+        async with DuckDBSink(settings=settings, batch_size=2_000) as sink:
+            for offset in range(matches):
+                simulator = MatchSimulator(
+                    match_id=f"apex-{seed + offset:04d}",
+                    seed=seed + offset,
+                    tick_rate_hz=tick_rate,
+                )
+                for event in simulator.run():
+                    await sink.handle(event)
+            await sink.flush()
+
+            rows = sink.count("training_data")
+            ct_wins, t_wins = sink.label_balance()
+            path = sink.export_parquet(destination)
+
+            typer.echo(f"\n  matches        {sink.count('matches'):,}")
+            typer.echo(f"  rounds         {sink.count('rounds'):,}")
+            typer.echo(f"  raw ticks      {sink.count('ticks'):,}")
+            typer.echo(f"  training rows  {rows:,}")
+            if rows:
+                typer.echo(f"  label balance  CT {ct_wins / rows:.1%}  vs  T {t_wins / rows:.1%}")
+            typer.echo(f"  database       {settings.duckdb_path}")
+            typer.echo(f"  parquet        {path}  ({path.stat().st_size / 1024:,.0f} KB)\n")
+
+    asyncio.run(_run())
+
+
 if __name__ == "__main__":  # pragma: no cover
     app()

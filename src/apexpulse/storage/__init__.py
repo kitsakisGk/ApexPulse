@@ -1,6 +1,7 @@
 """Live state manager, pluggable state stores, and the DuckDB historical sink."""
 
 from apexpulse.storage import keys
+from apexpulse.storage.duckdb_sink import DuckDBSink, SinkStats
 from apexpulse.storage.match_state import (
     LiveSnapshot,
     MatchHistory,
@@ -17,6 +18,7 @@ from apexpulse.storage.state import (
 )
 
 __all__ = [
+    "DuckDBSink",
     "InMemoryStateStore",
     "LiveSnapshot",
     "MatchHistory",
@@ -24,6 +26,7 @@ __all__ = [
     "MomentumSnapshot",
     "RedisStateStore",
     "RoundResult",
+    "SinkStats",
     "SqliteStateStore",
     "StateStore",
     "create_state_store",
