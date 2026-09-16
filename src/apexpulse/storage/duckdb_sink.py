@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
     from apexpulse.config import Settings
     from apexpulse.schemas.events import MatchEndEvent, RoundEndEvent, TickEvent
+    from apexpulse.stream.window import TelemetryWindow, WindowedMetrics
 
 logger = get_logger(__name__)
 
@@ -54,7 +55,10 @@ CREATE TABLE IF NOT EXISTS ticks (
     equipment_ct       INTEGER NOT NULL,
     equipment_t        INTEGER NOT NULL,
     losses_ct          INTEGER NOT NULL,
-    losses_t           INTEGER NOT NULL
+    losses_t           INTEGER NOT NULL,
+    kills_ct_window    INTEGER NOT NULL DEFAULT 0,
+    kills_t_window     INTEGER NOT NULL DEFAULT 0,
+    window_seconds     DOUBLE  NOT NULL DEFAULT 0.0
 );
 
 -- No primary key on `ticks` deliberately. It is append-only and hot: a key would
@@ -128,6 +132,9 @@ _ARROW_SCHEMA_FIELDS: Final = (
     ("equipment_t", "int32"),
     ("losses_ct", "int32"),
     ("losses_t", "int32"),
+    ("kills_ct_window", "int32"),
+    ("kills_t_window", "int32"),
+    ("window_seconds", "float64"),
 )
 """Column order and type of a tick row, matching the ``ticks`` table."""
 
@@ -171,13 +178,16 @@ class DuckDBSink:
         path: Database file, or ``:memory:`` for an ephemeral store.
         settings: Runtime configuration; defaults to the process settings.
         batch_size: Ticks buffered before an automatic flush.
+        window_seconds: Match time retained for the momentum columns.
     """
 
     path: Path | str | None = None
     settings: Settings = field(default_factory=get_settings)
     batch_size: int = DEFAULT_BATCH_SIZE
+    window_seconds: float = 15.0
 
     _conn: duckdb.DuckDBPyConnection | None = field(default=None, init=False, repr=False)
+    _windows: dict[str, TelemetryWindow] = field(default_factory=dict, init=False, repr=False)
     _buffer: list[tuple[Any, ...]] = field(default_factory=list, init=False, repr=False)
     _stats: SinkStats = field(default_factory=SinkStats, init=False, repr=False)
 
@@ -234,9 +244,16 @@ class DuckDBSink:
 
     # -- Writes ---------------------------------------------------------------
 
-    async def write_tick(self, tick: TickEvent) -> None:
-        """Buffer ``tick``, flushing once the batch is full."""
-        self._buffer.append(self._tick_row(tick))
+    async def write_tick(self, tick: TickEvent, metrics: WindowedMetrics | None = None) -> None:
+        """Buffer ``tick``, flushing once the batch is full.
+
+        Args:
+            tick: The snapshot to persist.
+            metrics: Windowed momentum for this tick. Persisted so the offline
+                feature path can reproduce it; without it the momentum features
+                would be constant zero in training and carry no signal.
+        """
+        self._buffer.append(self._tick_row(tick, metrics))
         if len(self._buffer) >= self.batch_size:
             await self.flush()
 
@@ -374,20 +391,30 @@ class DuckDBSink:
         """Route a telemetry event to the appropriate table.
 
         Registered against the consumer with ``consumer.on(None, sink.handle)``.
+        Maintains a sliding window per match so persisted ticks carry the same
+        momentum the online extractor would compute for them.
         """
         from apexpulse.schemas.events import MatchEndEvent, RoundEndEvent, TickEvent
+        from apexpulse.stream.window import TelemetryWindow
+
+        window = self._windows.get(event.match_id)
+        if window is None:
+            window = TelemetryWindow(span_seconds=self.window_seconds)
+            self._windows[event.match_id] = window
+        window.observe(event)
 
         if isinstance(event, TickEvent):
-            await self.write_tick(event)
+            await self.write_tick(event, window.metrics())
         elif isinstance(event, RoundEndEvent):
             await self.write_round(event)
         elif isinstance(event, MatchEndEvent):
             await self.write_match(event)
+            self._windows.pop(event.match_id, None)
 
     # -- Internals ------------------------------------------------------------
 
     @staticmethod
-    def _tick_row(tick: TickEvent) -> tuple[Any, ...]:
+    def _tick_row(tick: TickEvent, metrics: WindowedMetrics | None = None) -> tuple[Any, ...]:
         """Flatten a tick into the column order of the ``ticks`` table."""
         state = tick.state
         round_state = state.round_state
@@ -416,6 +443,9 @@ class DuckDBSink:
             state.economy_t.equipment_value,
             state.economy_ct.consecutive_losses,
             state.economy_t.consecutive_losses,
+            metrics.kills_ct if metrics else 0,
+            metrics.kills_t if metrics else 0,
+            metrics.span_seconds if metrics else 0.0,
         )
 
     async def __aenter__(self) -> Self:

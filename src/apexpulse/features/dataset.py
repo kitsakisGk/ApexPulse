@@ -40,7 +40,6 @@ def build_feature_frame(frame: pd.DataFrame) -> pd.DataFrame:
     Returns:
         A frame whose columns are exactly :data:`FEATURE_NAMES`, in order.
     """
-    import numpy as np
     import pandas as pd
 
     max_alive = float(constants.PLAYERS_PER_TEAM)
@@ -85,12 +84,31 @@ def build_feature_frame(frame: pd.DataFrame) -> pd.DataFrame:
         / constants.MAX_REGULATION_ROUNDS
     ).clip(0.0, 1.0)
 
-    # Momentum is not persisted per tick, so offline rows carry zeros. The online
-    # extractor fills these from the sliding window.
-    features["kill_delta_window"] = np.zeros(len(frame), dtype=float)
-    features["engagement_pace"] = np.zeros(len(frame), dtype=float)
+    # Momentum, reproduced from the window columns the sink persists. Rows written
+    # before those columns existed fall back to zero rather than failing, which
+    # keeps an older database readable.
+    kills_ct = _optional_column(frame, "kills_ct_window")
+    kills_t = _optional_column(frame, "kills_t_window")
+    window_seconds = _optional_column(frame, "window_seconds")
+
+    features["kill_delta_window"] = ((kills_ct - kills_t) / float(constants.PLAYERS_PER_TEAM)).clip(
+        -1.0, 1.0
+    )
+    total_kills = kills_ct + kills_t
+    features["engagement_pace"] = (
+        (total_kills / window_seconds.where(window_seconds > 0)).fillna(0.0)
+    ).clip(0.0, 1.0)
 
     return features[list(FEATURE_NAMES)]
+
+
+def _optional_column(frame: pd.DataFrame, name: str) -> pd.Series:
+    """Return ``name`` as floats, or zeros when the column predates the schema."""
+    import pandas as pd
+
+    if name not in frame.columns:
+        return pd.Series(0.0, index=frame.index, dtype=float)
+    return frame[name].fillna(0.0).astype(float)
 
 
 def build_training_set(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
