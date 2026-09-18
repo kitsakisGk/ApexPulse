@@ -368,6 +368,11 @@ def train(
     rounds: int = typer.Option(400, help="Maximum boosting rounds."),
     seed: int = typer.Option(42, help="Seeds the booster for a reproducible run."),
     save: bool = typer.Option(True, help="Write the checkpoint to the model directory."),
+    calibrate: bool = typer.Option(
+        False,
+        help="Fit an isotonic calibrator. Off by default: measured to worsen both "
+        "skill and calibration on this model.",
+    ),
 ) -> None:
     """Train the win-probability model on the stored dataset.
 
@@ -399,8 +404,12 @@ def train(
         typer.echo(f"\nTraining on {rows:,} rows from {frame['match_id'].nunique()} matches")
         typer.echo("=" * 62)
 
-        booster, result = train_model(
-            frame, test_fraction=test_fraction, num_rounds=rounds, seed=seed
+        booster, calibrator, result = train_model(
+            frame,
+            test_fraction=test_fraction,
+            num_rounds=rounds,
+            seed=seed,
+            calibrate=calibrate,
         )
         metrics = result.metrics
 
@@ -438,18 +447,29 @@ def train(
         test_features, test_labels = build_training_set(test_frame)
 
         matrix = xgb.DMatrix(test_features, feature_names=list(FEATURE_NAMES))
-        probabilities = booster.predict(matrix, iteration_range=(0, booster.best_iteration + 1))
-        report = assess_calibration(test_labels, probabilities)
+        raw = booster.predict(matrix, iteration_range=(0, booster.best_iteration + 1))
+        calibrated = calibrator.apply(raw)
+
+        report = assess_calibration(test_labels, calibrated)
+        raw_report = assess_calibration(test_labels, raw)
 
         typer.echo("\n  Calibration (does a stated 70% actually win 70% of the time?)")
         typer.echo(format_reliability_table(report))
+        if not calibrator.is_identity:
+            typer.echo(
+                f"    raw model      {raw_report.expected_calibration_error:.2%}"
+                f"   ->  calibrated  {report.expected_calibration_error:.2%}"
+            )
         verdict = "well calibrated" if report.is_well_calibrated else "needs calibration"
         typer.echo(f"    verdict        {verdict}")
 
         if save:
-            model_path, metadata_path = save_model(booster, result, settings=settings)
-            typer.echo(f"\n  Saved model    {model_path}")
-            typer.echo(f"  Saved metadata {metadata_path}\n")
+            model_path, calibrator_path, metadata_path = save_model(
+                booster, result, calibrator, settings=settings
+            )
+            typer.echo(f"\n  Saved model      {model_path}")
+            typer.echo(f"  Saved calibrator {calibrator_path}")
+            typer.echo(f"  Saved metadata   {metadata_path}\n")
         else:
             typer.echo("\n  (not saved; pass --save to write the checkpoint)\n")
 
