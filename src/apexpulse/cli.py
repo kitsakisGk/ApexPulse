@@ -362,5 +362,99 @@ def dataset(
     asyncio.run(_run())
 
 
+@app.command()
+def train(
+    test_fraction: float = typer.Option(0.2, help="Share of matches held out for evaluation."),
+    rounds: int = typer.Option(400, help="Maximum boosting rounds."),
+    seed: int = typer.Option(42, help="Seeds the booster for a reproducible run."),
+    save: bool = typer.Option(True, help="Write the checkpoint to the model directory."),
+) -> None:
+    """Train the win-probability model on the stored dataset.
+
+    Reads the labelled ``training_data`` view from DuckDB, holds out whole
+    matches, trains a gradient-boosted classifier, and reports how well its
+    probabilities hold up.
+    """
+    from apexpulse.ml import (
+        assess_calibration,
+        format_reliability_table,
+        save_model,
+        train_model,
+    )
+    from apexpulse.storage import DuckDBSink
+
+    configure_logging()
+    settings = get_settings()
+
+    async def _run() -> None:
+        async with DuckDBSink(settings=settings) as sink:
+            rows = sink.count("training_data")
+            if rows == 0:
+                typer.echo(
+                    "No training data found. Generate some first:\n  apexpulse dataset --matches 40"
+                )
+                raise typer.Exit(1)
+            frame = sink.training_frame()
+
+        typer.echo(f"\nTraining on {rows:,} rows from {frame['match_id'].nunique()} matches")
+        typer.echo("=" * 62)
+
+        booster, result = train_model(
+            frame, test_fraction=test_fraction, num_rounds=rounds, seed=seed
+        )
+        metrics = result.metrics
+
+        typer.echo("\n  Dataset")
+        typer.echo(
+            f"    train          {result.train_rows:,} rows / {result.train_matches} matches"
+        )
+        typer.echo(f"    test           {result.test_rows:,} rows / {result.test_matches} matches")
+        typer.echo(f"    CT base rate   {metrics.base_rate:.1%}")
+
+        typer.echo("\n  Held-out performance")
+        typer.echo(
+            f"    log loss       {metrics.log_loss:.4f}  (baseline {metrics.baseline_log_loss:.4f})"
+        )
+        typer.echo(
+            f"    skill score    {metrics.skill_score:+.1%}  over always guessing the base rate"
+        )
+        typer.echo(f"    ROC AUC        {metrics.roc_auc:.4f}")
+        typer.echo(f"    Brier score    {metrics.brier_score:.4f}")
+        typer.echo(f"    accuracy       {metrics.accuracy:.1%}")
+        typer.echo(f"    best iteration {result.best_iteration}")
+
+        typer.echo("\n  Feature importance (gain)")
+        for name, gain in list(result.feature_importance.items())[:10]:
+            bar = "#" * max(1, round(gain * 60)) if gain > 0 else ""
+            typer.echo(f"    {name:20} {gain:>6.1%}  {bar}")
+
+        # Calibration is the measure that matters for a broadcast gauge: a "70%"
+        # must be right about 70% of the time.
+        import xgboost as xgb
+
+        from apexpulse.features import FEATURE_NAMES, build_training_set, split_by_match
+
+        _, test_frame = split_by_match(frame, test_fraction=test_fraction)
+        test_features, test_labels = build_training_set(test_frame)
+
+        matrix = xgb.DMatrix(test_features, feature_names=list(FEATURE_NAMES))
+        probabilities = booster.predict(matrix, iteration_range=(0, booster.best_iteration + 1))
+        report = assess_calibration(test_labels, probabilities)
+
+        typer.echo("\n  Calibration (does a stated 70% actually win 70% of the time?)")
+        typer.echo(format_reliability_table(report))
+        verdict = "well calibrated" if report.is_well_calibrated else "needs calibration"
+        typer.echo(f"    verdict        {verdict}")
+
+        if save:
+            model_path, metadata_path = save_model(booster, result, settings=settings)
+            typer.echo(f"\n  Saved model    {model_path}")
+            typer.echo(f"  Saved metadata {metadata_path}\n")
+        else:
+            typer.echo("\n  (not saved; pass --save to write the checkpoint)\n")
+
+    asyncio.run(_run())
+
+
 if __name__ == "__main__":  # pragma: no cover
     app()
