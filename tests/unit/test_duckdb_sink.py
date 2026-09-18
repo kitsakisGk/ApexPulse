@@ -356,3 +356,89 @@ async def test_bulk_writes_sustain_a_useful_throughput() -> None:
         assert sink.count("ticks") == 5_000
 
     assert elapsed < 5.0, f"5k ticks took {elapsed:.2f}s"
+
+
+# -- Schema migration ---------------------------------------------------------
+
+
+async def test_a_database_missing_newer_columns_is_migrated(tmp_path) -> None:
+    """Regression: an older file crashed every insert on the column count.
+
+    `CREATE TABLE IF NOT EXISTS` leaves an existing table untouched, so a
+    database written before the momentum columns kept 21 columns while the writer
+    supplied 24. Every test used a fresh in-memory database, so nothing caught it.
+    """
+    import duckdb
+
+    path = tmp_path / "legacy.duckdb"
+
+    # Build a database with the pre-momentum layout.
+    legacy = duckdb.connect(str(path))
+    legacy.execute(
+        """
+        CREATE TABLE ticks (
+            match_id VARCHAR NOT NULL, sequence BIGINT NOT NULL,
+            timestamp TIMESTAMPTZ NOT NULL, map_name VARCHAR NOT NULL,
+            round_number INTEGER NOT NULL, phase VARCHAR NOT NULL,
+            seconds_remaining DOUBLE NOT NULL, bomb_planted BOOLEAN NOT NULL,
+            bomb_seconds DOUBLE, score_ct INTEGER NOT NULL, score_t INTEGER NOT NULL,
+            alive_ct INTEGER NOT NULL, alive_t INTEGER NOT NULL,
+            health_ct INTEGER NOT NULL, health_t INTEGER NOT NULL,
+            money_ct INTEGER NOT NULL, money_t INTEGER NOT NULL,
+            equipment_ct INTEGER NOT NULL, equipment_t INTEGER NOT NULL,
+            losses_ct INTEGER NOT NULL, losses_t INTEGER NOT NULL
+        )
+        """
+    )
+    legacy.close()
+
+    async with DuckDBSink(path=path, settings=Settings(), batch_size=2) as sink:
+        await sink.write_tick(make_tick(1))
+        await sink.write_tick(make_tick(2))
+        await sink.write_round(make_round(1, Team.CT))
+
+        assert sink.count("ticks") == 2
+        assert sink.count("training_data") == 2
+
+
+async def test_migrated_rows_default_their_momentum_to_zero(tmp_path) -> None:
+    """Rows that predate the columns must read back as zero, not null."""
+    import duckdb
+
+    path = tmp_path / "legacy.duckdb"
+    legacy = duckdb.connect(str(path))
+    legacy.execute(
+        "CREATE TABLE ticks (match_id VARCHAR, sequence BIGINT, timestamp TIMESTAMPTZ, "
+        "map_name VARCHAR, round_number INTEGER, phase VARCHAR, seconds_remaining DOUBLE, "
+        "bomb_planted BOOLEAN, bomb_seconds DOUBLE, score_ct INTEGER, score_t INTEGER, "
+        "alive_ct INTEGER, alive_t INTEGER, health_ct INTEGER, health_t INTEGER, "
+        "money_ct INTEGER, money_t INTEGER, equipment_ct INTEGER, equipment_t INTEGER, "
+        "losses_ct INTEGER, losses_t INTEGER)"
+    )
+    legacy.execute(
+        "INSERT INTO ticks VALUES ('old-1', 1, now(), 'de_mirage', 1, 'live', 90.0, "
+        "false, NULL, 0, 0, 5, 5, 500, 500, 5000, 4000, 12000, 9000, 0, 0)"
+    )
+    legacy.close()
+
+    async with DuckDBSink(path=path, settings=Settings()) as sink:
+        row = sink._db.execute(
+            "SELECT kills_ct_window, kills_t_window, window_seconds FROM ticks"
+        ).fetchone()
+
+    assert row == (0, 0, 0.0)
+
+
+async def test_migration_is_idempotent(tmp_path) -> None:
+    """Reopening an already-migrated database must not fail or duplicate columns."""
+    path = tmp_path / "telemetry.duckdb"
+
+    async with DuckDBSink(path=path, settings=Settings()) as first:
+        await first.write_tick(make_tick(1))
+        await first.flush()
+
+    async with DuckDBSink(path=path, settings=Settings()) as second:
+        await second.write_tick(make_tick(2))
+        await second.flush()
+
+        assert second.count("ticks") == 2

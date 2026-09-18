@@ -138,6 +138,16 @@ _ARROW_SCHEMA_FIELDS: Final = (
 )
 """Column order and type of a tick row, matching the ``ticks`` table."""
 
+_MIGRATION_TYPES: Final[dict[str, tuple[str, str]]] = {
+    "string": ("VARCHAR", "''"),
+    "int64": ("BIGINT", "0"),
+    "int32": ("INTEGER", "0"),
+    "float64": ("DOUBLE", "0.0"),
+    "bool": ("BOOLEAN", "FALSE"),
+    "timestamp": ("TIMESTAMPTZ", "NULL"),
+}
+"""SQL type and backfill default for each Arrow kind, used when migrating."""
+
 
 @cache
 def _arrow_schema() -> Any:
@@ -225,8 +235,36 @@ class DuckDBSink:
 
         self._conn = duckdb.connect(str(target))
         self._db.execute(SCHEMA_SQL)
+        added = self._migrate_schema()
         self._db.execute(TRAINING_VIEW_SQL)
-        logger.info("duckdb_sink_started", path=str(target))
+        logger.info("duckdb_sink_started", path=str(target), columns_added=added)
+
+    def _migrate_schema(self) -> list[str]:
+        """Add any columns a pre-existing database is missing; return their names.
+
+        ``CREATE TABLE IF NOT EXISTS`` leaves an existing table untouched, so a
+        database written before a column was introduced keeps the old layout and
+        every insert then fails on the column count. Reconciling here means an
+        older file upgrades in place rather than having to be deleted.
+        """
+        existing = {
+            row[0]
+            for row in self._db.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = 'ticks'"
+            ).fetchall()
+        }
+
+        added: list[str] = []
+        for name, kind in _ARROW_SCHEMA_FIELDS:
+            if name in existing:
+                continue
+            sql_type, default = _MIGRATION_TYPES[kind]
+            self._db.execute(f"ALTER TABLE ticks ADD COLUMN {name} {sql_type} DEFAULT {default}")
+            added.append(name)
+
+        if added:
+            logger.info("schema_migrated", table="ticks", added=added)
+        return added
 
     async def stop(self) -> None:
         """Flush buffered ticks and close the database."""
