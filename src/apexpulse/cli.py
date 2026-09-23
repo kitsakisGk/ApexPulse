@@ -476,5 +476,95 @@ def train(
     asyncio.run(_run())
 
 
+@app.command()
+def predict(
+    seed: int = typer.Option(42, help="RNG seed for the simulated match."),
+    tick_rate: float = typer.Option(8.0, help="Snapshots per simulated second."),
+    rounds: int = typer.Option(3, help="Rounds to score before stopping."),
+    max_trees: int = typer.Option(0, help="Cap trees per prediction; 0 uses the checkpoint."),
+) -> None:
+    """Score a simulated match tick by tick and print the win probability.
+
+    Runs the real serving path — feature extraction, model, calibrator — and
+    reports the per-tick latency the dashboard would experience.
+    """
+    from apexpulse.inference import InferenceEngine
+    from apexpulse.schemas.events import RoundEndEvent, TickEvent
+    from apexpulse.stream.window import TelemetryWindow
+
+    configure_logging()
+
+    try:
+        engine = InferenceEngine.from_checkpoint(max_trees=max_trees or None)
+    except FileNotFoundError as exc:
+        typer.echo(f"{exc}")
+        raise typer.Exit(1) from exc
+
+    from apexpulse.producer import MatchSimulator
+
+    simulator = MatchSimulator(seed=seed, tick_rate_hz=tick_rate)
+    window = TelemetryWindow(span_seconds=15.0)
+
+    typer.echo(f"\nScoring match {simulator.match_id}  (seed={seed}, {tick_rate} Hz)")
+    typer.echo(f"trees per prediction: {engine.tree_count}")
+    typer.echo("=" * 72)
+    typer.echo("  round  clock   alive      CT win%   bar                        latency")
+    typer.echo("  " + "-" * 70)
+
+    completed = 0
+    emitted = 0
+
+    for event in simulator.run():
+        window.observe(event)
+
+        if isinstance(event, RoundEndEvent):
+            completed += 1
+            typer.echo(
+                f"  -- round {event.round_number} to {event.winner.value}"
+                f" ({event.reason.value}), score {event.score_ct}-{event.score_t} --"
+            )
+            if completed >= rounds:
+                break
+            continue
+
+        if not isinstance(event, TickEvent):
+            continue
+
+        prediction = engine.predict(event.state, window.metrics())
+        if not prediction.scored:
+            continue
+
+        # One line per simulated second keeps the output readable.
+        emitted += 1
+        if emitted % max(1, int(tick_rate)) != 0:
+            continue
+
+        state = event.state
+        probability = prediction.ct_win_probability
+        filled = round(probability * 24)
+        bar = "#" * filled + "." * (24 - filled)
+        bomb = " BOMB" if state.round_state.bomb_planted else "     "
+
+        typer.echo(
+            f"  {state.round_state.round_number:>5}"
+            f"  {state.round_state.seconds_remaining:>5.1f}"
+            f"  {state.alive_ct}v{state.alive_t}{bomb}"
+            f"  {probability:>7.1%}   {bar}  {prediction.latency_ms:>6.2f} ms"
+        )
+
+    stats = engine.stats
+    typer.echo("\n  Latency over " + f"{stats.count:,} scored ticks")
+    typer.echo(f"    mean   {stats.mean_ms:>7.3f} ms")
+    typer.echo(f"    p50    {stats.p50_ms:>7.3f} ms")
+    typer.echo(f"    p95    {stats.p95_ms:>7.3f} ms")
+    typer.echo(f"    p99    {stats.p99_ms:>7.3f} ms")
+
+    from apexpulse.inference.engine import LATENCY_BUDGET_MS
+
+    verdict = "within budget" if stats.p99_ms < LATENCY_BUDGET_MS else "OVER BUDGET"
+    typer.echo(f"    budget {LATENCY_BUDGET_MS:>7.3f} ms  ->  {verdict}")
+    typer.echo(f"    skipped {stats.skipped:,} unscoreable ticks (freezetime)\n")
+
+
 if __name__ == "__main__":  # pragma: no cover
     app()
