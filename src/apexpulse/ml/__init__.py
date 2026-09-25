@@ -11,6 +11,14 @@ from apexpulse.ml.calibrator import (
     ProbabilityCalibrator,
     fit_calibrator,
 )
+from apexpulse.ml.confidence import (
+    ConfidenceBand,
+    ConfidenceScore,
+    ConfidenceScorer,
+    FeatureSupport,
+    decisiveness,
+    stability,
+)
 from apexpulse.ml.training import (
     DEFAULT_PARAMS,
     METADATA_FILENAME,
@@ -30,14 +38,20 @@ __all__ = [
     "MODEL_FILENAME",
     "CalibrationBin",
     "CalibrationReport",
+    "ConfidenceBand",
+    "ConfidenceScore",
+    "ConfidenceScorer",
+    "FeatureSupport",
     "ProbabilityCalibrator",
     "TrainingMetrics",
     "TrainingResult",
     "assess_calibration",
+    "decisiveness",
     "evaluate",
     "fit_calibrator",
     "format_reliability_table",
     "load_model",
     "save_model",
+    "stability",
     "train_model",
 ]
