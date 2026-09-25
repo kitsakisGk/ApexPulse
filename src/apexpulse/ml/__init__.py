@@ -1,5 +1,11 @@
 """Offline training, calibration, and model artifact management."""
 
+from apexpulse.ml.benchmark import (
+    BenchmarkReport,
+    SliceResult,
+    benchmark_by_situation,
+    format_benchmark_table,
+)
 from apexpulse.ml.calibration import (
     CalibrationBin,
     CalibrationReport,
@@ -44,6 +50,7 @@ __all__ = [
     "DEFAULT_PARAMS",
     "METADATA_FILENAME",
     "MODEL_FILENAME",
+    "BenchmarkReport",
     "CalibrationBin",
     "CalibrationReport",
     "ConfidenceBand",
@@ -55,12 +62,15 @@ __all__ = [
     "FeatureDrift",
     "FeatureSupport",
     "ProbabilityCalibrator",
+    "SliceResult",
     "TrainingMetrics",
     "TrainingResult",
     "assess_calibration",
+    "benchmark_by_situation",
     "decisiveness",
     "evaluate",
     "fit_calibrator",
+    "format_benchmark_table",
     "format_drift_table",
     "format_reliability_table",
     "load_model",

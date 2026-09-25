@@ -566,5 +566,81 @@ def predict(
     typer.echo(f"    skipped {stats.skipped:,} unscoreable ticks (freezetime)\n")
 
 
+@app.command()
+def validate(
+    test_fraction: float = typer.Option(0.2, help="Share of matches held out."),
+) -> None:
+    """Benchmark the saved model by situation and check for feature drift.
+
+    A single held-out score says the model works on average. This reports where
+    it works and where it does not, then compares the live feature distribution
+    against the one it was trained on.
+    """
+    import xgboost as xgb
+
+    from apexpulse.features import FEATURE_NAMES, build_training_set, split_by_match
+    from apexpulse.ml import (
+        DriftDetector,
+        benchmark_by_situation,
+        format_benchmark_table,
+        format_drift_table,
+        load_model,
+    )
+    from apexpulse.storage import DuckDBSink
+
+    configure_logging()
+    settings = get_settings()
+
+    async def _run() -> None:
+        async with DuckDBSink(settings=settings) as sink:
+            if sink.count("training_data") == 0:
+                typer.echo("No data found. Run 'apexpulse dataset --matches 40' first.")
+                raise typer.Exit(1)
+            frame = sink.training_frame()
+
+        try:
+            booster, calibrator, metadata = load_model(settings=settings)
+        except FileNotFoundError as exc:
+            typer.echo(f"{exc}")
+            raise typer.Exit(1) from exc
+
+        train_frame, test_frame = split_by_match(frame, test_fraction=test_fraction)
+        test_features, test_labels = build_training_set(test_frame)
+
+        best = metadata.get("best_iteration")
+        iteration_range = (0, int(best) + 1) if best is not None else None
+        matrix = xgb.DMatrix(test_features, feature_names=list(FEATURE_NAMES))
+        raw = (
+            booster.predict(matrix, iteration_range=iteration_range)
+            if iteration_range
+            else booster.predict(matrix)
+        )
+        probabilities = calibrator.apply(raw)
+
+        typer.echo(f"\nValidating on {len(test_frame):,} held-out rows")
+        typer.echo("=" * 62)
+
+        report = benchmark_by_situation(test_frame, test_labels, probabilities)
+        typer.echo("\n  Accuracy by match situation")
+        typer.echo(format_benchmark_table(report))
+
+        failing = report.failing_slices
+        if failing:
+            typer.echo(
+                f"\n  {len(failing)} situation(s) add no skill: "
+                + ", ".join(item.name for item in failing)
+            )
+
+        train_features, _ = build_training_set(train_frame)
+        detector = DriftDetector.from_frame(train_features)
+        live = {name: test_features[name].tolist() for name in test_features.columns}
+
+        typer.echo("\n  Feature drift, held-out against training")
+        typer.echo(format_drift_table(detector.detect(live)))
+        typer.echo("")
+
+    asyncio.run(_run())
+
+
 if __name__ == "__main__":  # pragma: no cover
     app()

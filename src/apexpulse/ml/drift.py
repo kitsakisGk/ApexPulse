@@ -29,7 +29,7 @@ from apexpulse.features import FEATURE_NAMES
 from apexpulse.logging import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
 logger = get_logger(__name__)
 
@@ -241,7 +241,7 @@ class DriftDetector:
             }
         )
 
-    def detect(self, live: dict[str, Sequence[float]]) -> DriftReport:
+    def detect(self, live: Mapping[str, Sequence[float]]) -> DriftReport:
         """Compare ``live`` feature samples against the reference.
 
         Args:
