@@ -43,7 +43,29 @@ PSI_SHIFTED = 0.25
 """Above this, the distribution has moved enough to warrant retraining."""
 
 MIN_SAMPLES = 200
-"""Live samples required before a verdict is meaningful."""
+"""Live rows required before a verdict is issued at all."""
+
+MIN_DISTINCT_VALUES = 30
+"""Distinct live values a feature needs before its PSI is trusted.
+
+Applies only when the reference was similarly coarse. A feature that varied
+widely in training and has collapsed to a constant is a failure, not a thin
+sample, and is always judged.
+
+Row count alone is misleading. A per-match feature such as ``score_delta`` takes
+one value per match and repeats it across every tick, so 14,000 rows drawn from
+four matches carry only a handful of independent samples. PSI reads that as
+drift when nothing has drifted. Measured on the same generator, train against
+held-out:
+
+    12 matches   score_delta PSI 1.10
+    20 matches   score_delta PSI 0.19
+    40 matches   score_delta PSI 0.11
+
+Nothing drifted in any of those runs. Features below this threshold are measured
+and reported but excluded from the overall verdict, so a thin sample cannot
+raise a false retrain flag.
+"""
 
 _EPSILON = 1e-6
 """Floor applied to bin proportions so an empty bin cannot produce infinity."""
@@ -78,6 +100,8 @@ class FeatureDrift:
     reference_mean: float
     live_mean: float
     severity: DriftSeverity
+    well_sampled: bool = True
+    """Whether the live sample had enough distinct values to trust the PSI."""
 
     @property
     def has_drifted(self) -> bool:
@@ -86,6 +110,8 @@ class FeatureDrift:
 
     def describe(self) -> str:
         """Return a one-line summary for an operator."""
+        if not self.well_sampled:
+            return f"{self.name}: too few distinct values to judge (PSI {self.psi:.3f})"
         direction = "up" if self.live_mean > self.reference_mean else "down"
         return (
             f"{self.name}: PSI {self.psi:.3f} ({self.severity.value}), "
@@ -107,7 +133,11 @@ class DriftReport:
         """Features that moved, worst first."""
         return tuple(
             sorted(
-                (feature for feature in self.features if feature.has_drifted),
+                (
+                    feature
+                    for feature in self.features
+                    if feature.has_drifted and feature.well_sampled
+                ),
                 key=lambda feature: feature.psi,
                 reverse=True,
             )
@@ -268,6 +298,16 @@ class DriftDetector:
             live_array = np.asarray(live_values, dtype=float)
 
             psi = population_stability_index(reference_values, live_values)
+
+            # Two different situations produce few distinct live values, and only
+            # one of them is unknowable. A feature that was already coarse in
+            # training is thinly sampled; a feature that varied in training and
+            # has collapsed is a definite upstream failure, so it stays judged.
+            live_distinct = int(np.unique(live_array).size)
+            reference_distinct = int(np.unique(reference_array).size)
+            collapsed = reference_distinct > live_distinct * 2
+            thin = live_distinct < MIN_DISTINCT_VALUES and not collapsed
+
             reference_mean = float(reference_array.mean())
             live_mean = float(live_array.mean())
             reference_std = float(reference_array.std())
@@ -283,6 +323,7 @@ class DriftDetector:
                     reference_mean=reference_mean,
                     live_mean=live_mean,
                     severity=DriftSeverity.from_psi(psi),
+                    well_sampled=not thin,
                 )
             )
 
@@ -317,16 +358,19 @@ class DriftDetector:
 
 
 def _worst_severity(drifts: Sequence[FeatureDrift]) -> DriftSeverity:
-    """Return the most severe verdict across features.
+    """Return the most severe verdict across well-sampled features.
 
     One badly drifted feature is enough to invalidate a prediction, so the
-    overall verdict takes the worst rather than an average.
+    verdict takes the worst rather than an average. Thinly-sampled features are
+    excluded: their PSI is noise, and letting it raise a retrain flag would
+    train an operator to ignore the alarm.
     """
-    if not drifts:
-        return DriftSeverity.STABLE
-    if any(feature.severity is DriftSeverity.SEVERE for feature in drifts):
+    judged = [feature for feature in drifts if feature.well_sampled]
+    if not judged:
+        return DriftSeverity.UNKNOWN if drifts else DriftSeverity.STABLE
+    if any(feature.severity is DriftSeverity.SEVERE for feature in judged):
         return DriftSeverity.SEVERE
-    if any(feature.severity is DriftSeverity.MODERATE for feature in drifts):
+    if any(feature.severity is DriftSeverity.MODERATE for feature in judged):
         return DriftSeverity.MODERATE
     return DriftSeverity.STABLE
 
@@ -342,7 +386,10 @@ def format_drift_table(report: DriftReport) -> str:
     ]
     ordered = sorted(report.features, key=lambda feature: feature.psi, reverse=True)
     for feature in ordered:
-        marker = " " if not feature.has_drifted else "*"
+        if not feature.well_sampled:
+            marker = "  (thin sample)"
+        else:
+            marker = " " if not feature.has_drifted else "*"
         lines.append(
             f"  {feature.name:<22} {feature.psi:>7.4f}  {feature.mean_shift_sigma:>+6.2f}σ  "  # noqa: RUF001
             f"{feature.severity.value:<9}{marker}"
@@ -353,6 +400,7 @@ def format_drift_table(report: DriftReport) -> str:
 
 
 __all__ = [
+    "MIN_DISTINCT_VALUES",
     "MIN_SAMPLES",
     "PSI_BINS",
     "PSI_SHIFTED",
