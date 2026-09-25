@@ -19,6 +19,14 @@ from apexpulse.ml.confidence import (
     decisiveness,
     stability,
 )
+from apexpulse.ml.drift import (
+    DriftDetector,
+    DriftReport,
+    DriftSeverity,
+    FeatureDrift,
+    format_drift_table,
+    population_stability_index,
+)
 from apexpulse.ml.training import (
     DEFAULT_PARAMS,
     METADATA_FILENAME,
@@ -41,6 +49,10 @@ __all__ = [
     "ConfidenceBand",
     "ConfidenceScore",
     "ConfidenceScorer",
+    "DriftDetector",
+    "DriftReport",
+    "DriftSeverity",
+    "FeatureDrift",
     "FeatureSupport",
     "ProbabilityCalibrator",
     "TrainingMetrics",
@@ -49,8 +61,10 @@ __all__ = [
     "decisiveness",
     "evaluate",
     "fit_calibrator",
+    "format_drift_table",
     "format_reliability_table",
     "load_model",
+    "population_stability_index",
     "save_model",
     "stability",
     "train_model",
