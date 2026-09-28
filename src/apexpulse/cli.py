@@ -642,5 +642,48 @@ def validate(
     asyncio.run(_run())
 
 
+@app.command()
+def serve(
+    host: str = typer.Option("", help="Bind address; defaults to the configured host."),
+    port: int = typer.Option(0, help="Port; defaults to the configured port."),
+    reload: bool = typer.Option(False, help="Restart on code changes, for development."),
+) -> None:
+    """Run the HTTP API.
+
+    Serves live match state, round history, and win-probability predictions.
+    Interactive documentation is at /docs once running.
+    """
+    import uvicorn
+
+    from apexpulse.api import create_app
+
+    configure_logging()
+    settings = get_settings()
+    bind_host = host or settings.api_host
+    bind_port = port or settings.api_port
+
+    display = "localhost" if bind_host in {"0.0.0.0", ""} else bind_host
+    typer.echo(f"\nApexPulse API on http://{display}:{bind_port}")
+    typer.echo("=" * 58)
+    typer.echo(f"  docs          http://{display}:{bind_port}/docs")
+    typer.echo(f"  health        http://{display}:{bind_port}/health")
+    typer.echo(f"  live matches  http://{display}:{bind_port}/matches")
+    typer.echo(f"  model         http://{display}:{bind_port}/model")
+    typer.echo("")
+    typer.echo("  Feed it a match in another terminal:")
+    typer.echo("    apexpulse live --speed 1.0 --max-events 0")
+    typer.echo("")
+
+    # `reload` needs an import string rather than an instance, since the reloader
+    # re-imports the app in a fresh process on every change.
+    uvicorn.run(
+        "apexpulse.api.factory:app" if reload else create_app(settings),
+        host=bind_host,
+        port=bind_port,
+        reload=reload,
+        log_config=None,
+    )
+
+
 if __name__ == "__main__":  # pragma: no cover
     app()
