@@ -647,6 +647,10 @@ def serve(
     host: str = typer.Option("", help="Bind address; defaults to the configured host."),
     port: int = typer.Option(0, help="Port; defaults to the configured port."),
     reload: bool = typer.Option(False, help="Restart on code changes, for development."),
+    simulate: bool = typer.Option(
+        False, help="Drive a live match inside the server, so there is data to watch."
+    ),
+    seed: int = typer.Option(42, help="RNG seed for the simulated match."),
 ) -> None:
     """Run the HTTP API.
 
@@ -669,15 +673,23 @@ def serve(
     typer.echo(f"  health        http://{display}:{bind_port}/health")
     typer.echo(f"  live matches  http://{display}:{bind_port}/matches")
     typer.echo(f"  model         http://{display}:{bind_port}/model")
+    typer.echo(f"  websocket     ws://{display}:{bind_port}/ws")
     typer.echo("")
-    typer.echo("  Feed it a match in another terminal:")
-    typer.echo("    apexpulse live --speed 1.0 --max-events 0")
+    if simulate:
+        typer.echo("  Simulating a live match in-process. Watch it with:")
+        typer.echo(f"    curl http://{display}:{bind_port}/matches/apex-demo")
+    else:
+        typer.echo("  Feed it a match in another terminal:")
+        typer.echo("    apexpulse live --speed 1.0 --max-events 0")
+        typer.echo("  Or restart with --simulate to drive one in-process.")
     typer.echo("")
 
     # `reload` needs an import string rather than an instance, since the reloader
     # re-imports the app in a fresh process on every change.
     uvicorn.run(
-        "apexpulse.api.factory:app" if reload else create_app(settings),
+        "apexpulse.api.factory:app"
+        if reload
+        else create_app(settings, simulate=simulate, simulate_seed=seed),
         host=bind_host,
         port=bind_port,
         reload=reload,
