@@ -52,7 +52,7 @@ def _team_summary(snapshot: LiveSnapshot, team: Team) -> TeamSummary:
     )
 
 
-def _to_snapshot(snapshot: LiveSnapshot, state: AppState) -> MatchSnapshot:
+def to_snapshot(snapshot: LiveSnapshot, state: AppState) -> MatchSnapshot:
     """Project stored state into the API response, scoring it if a model is loaded."""
     match_state = snapshot.state
     round_state = match_state.round_state
@@ -192,7 +192,7 @@ async def get_match(match_id: str, request: Request) -> MatchSnapshot:
             detail=f"no live state for match {match_id!r}",
         )
 
-    return _to_snapshot(snapshot, state)
+    return to_snapshot(snapshot, state)
 
 
 @router.get(

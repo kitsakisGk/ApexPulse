@@ -68,10 +68,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    from apexpulse.api.routes import health, matches, predictions
+    from apexpulse.api.routes import health, matches, predictions, stream
 
     app.include_router(health.router)
     app.include_router(matches.router)
     app.include_router(predictions.router)
+    app.include_router(stream.router)
 
     return app
