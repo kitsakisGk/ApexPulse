@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from apexpulse.api.connections import ConnectionManager
 from apexpulse.config import get_settings
 from apexpulse.logging import get_logger
 
@@ -32,6 +33,7 @@ class AppState:
     store: StateStore | None = None
     manager: MatchStateManager | None = None
     engine: InferenceEngine | None = None
+    connections: ConnectionManager = field(default_factory=ConnectionManager)
     started_at: float = field(default_factory=time.monotonic)
     predictions_served: int = 0
 
@@ -76,6 +78,7 @@ class AppState:
 
     async def shutdown(self) -> None:
         """Release resources held for the process lifetime."""
+        await self.connections.close_all()
         if self.store is not None:
             await self.store.stop()
             self.store = None
