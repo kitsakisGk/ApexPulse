@@ -1,0 +1,89 @@
+@import "tailwindcss";
+
+/**
+ * Dark-first palette for a broadcast overlay.
+ *
+ * CT blue and T gold come from the sides' in-game identities, so a viewer reads
+ * which team a number belongs to without checking a legend. Everything else is
+ * deliberately desaturated: on a dashboard with one headline number, competing
+ * colours make it harder to find.
+ */
+@theme {
+  /* Surfaces, dark to light. Panels sit above the page, not beside it. */
+  --color-base-950: #07090d;
+  --color-base-900: #0b0f16;
+  --color-base-850: #101620;
+  --color-base-800: #161e2b;
+  --color-base-700: #1f2937;
+  --color-base-600: #2d3a4d;
+
+  /* Counter-Terrorists. */
+  --color-ct: #4a9eff;
+  --color-ct-bright: #6fb3ff;
+  --color-ct-dim: #2563a8;
+
+  /* Terrorists. */
+  --color-t: #f0b232;
+  --color-t-bright: #ffc95c;
+  --color-t-dim: #a87a1d;
+
+  /* Status. Used sparingly, so it still reads as a signal. */
+  --color-live: #2ecc71;
+  --color-warn: #f39c12;
+  --color-danger: #e74c3c;
+  --color-muted: #64748b;
+
+  --font-sans: var(--font-geist-sans), system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+
+  --animate-pulse-live: pulse-live 2s ease-in-out infinite;
+  --animate-slide-in: slide-in 220ms ease-out;
+}
+
+@keyframes pulse-live {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+html,
+body {
+  background-color: var(--color-base-950);
+  color: #e2e8f0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Numbers that update in place need tabular figures, or the layout shifts on
+   every tick as digit widths change. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* A thin scrollbar keeps the event ticker from stealing visual weight. */
+.scroll-slim::-webkit-scrollbar {
+  width: 6px;
+}
+
+.scroll-slim::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scroll-slim::-webkit-scrollbar-thumb {
+  background: var(--color-base-700);
+  border-radius: 3px;
+}
