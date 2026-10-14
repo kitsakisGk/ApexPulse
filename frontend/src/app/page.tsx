@@ -1,16 +1,21 @@
 "use client";
 
 /**
- * Connection smoke page.
+ * The dashboard.
  *
- * Proves the frontend is genuinely wired to a running backend: it subscribes to
- * the demo match, reports socket status, and shows the probability moving. The
- * composed dashboard — gauge, player grid, event ticker — lands on Day 13; this
- * is the foundation it sits on.
+ * Layout follows how a viewer reads a match: the scoreline and the probability
+ * first, because that is the question; the player grid and economy next,
+ * because that is the evidence; the round log last, because that is the history.
  */
 
+import { EconomyTicker } from "@/components/EconomyTicker";
+import { EventLog } from "@/components/EventLog";
+import { MomentumTimeline } from "@/components/MomentumTimeline";
+import { PlayerGrid } from "@/components/PlayerGrid";
+import { ScoreBoard } from "@/components/ScoreBoard";
 import { useMatchStream } from "@/hooks/useMatchStream";
 import type { ConnectionStatus } from "@/hooks/useWebSocket";
+import { WinProbabilityGauge } from "@/components/WinProbabilityGauge";
 
 const DEMO_MATCH_ID = "apex-demo";
 
@@ -21,7 +26,13 @@ const STATUS_STYLE: Record<ConnectionStatus, string> = {
   closed: "bg-danger/15 text-danger",
 };
 
-function StatusPill({ status, attempts }: { status: ConnectionStatus; attempts: number }) {
+function StatusPill({
+  status,
+  attempts,
+}: {
+  status: ConnectionStatus;
+  attempts: number;
+}) {
   return (
     <span
       className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium ${STATUS_STYLE[status]}`}
@@ -35,99 +46,78 @@ function StatusPill({ status, attempts }: { status: ConnectionStatus; attempts: 
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-base-700 bg-base-850 px-4 py-3">
-      <div className="text-[0.7rem] uppercase tracking-wider text-muted">{label}</div>
-      <div className="tabular mt-1 text-lg font-semibold">{value}</div>
-    </div>
-  );
-}
-
-export default function Home() {
+export default function Dashboard() {
   const stream = useMatchStream(DEMO_MATCH_ID);
-  const { snapshot, prediction, status, attempts, received, rounds } = stream;
-
-  const probability = prediction?.ct_win_probability ?? null;
-  const percent = probability === null ? null : Math.round(probability * 1000) / 10;
+  const { snapshot, prediction, history, rounds, finished, status, attempts } = stream;
 
   return (
-    <main className="mx-auto max-w-4xl p-8">
-      <header className="flex items-baseline justify-between">
+    <main className="mx-auto max-w-6xl p-6 lg:p-8">
+      <header className="flex flex-wrap items-baseline justify-between gap-3">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">
+          <h1 className="text-2xl font-bold tracking-tight">
             Apex<span className="text-ct">Pulse</span>
           </h1>
-          <p className="mt-1 text-sm text-muted">
-            Live CS2 win probability · watching{" "}
+          <p className="mt-0.5 text-xs text-muted">
+            Live CS2 win probability ·{" "}
             <code className="text-base-600">{DEMO_MATCH_ID}</code>
           </p>
         </div>
         <StatusPill status={status} attempts={attempts} />
       </header>
 
-      <section className="mt-8">
-        <div className="flex items-end justify-between text-sm">
-          <span className="font-medium text-ct">Counter-Terrorists</span>
-          <span className="font-medium text-t">Terrorists</span>
-        </div>
-
-        {/* The headline number. A null probability means the tick is
-            unscoreable — freezetime, or no model — not a 50/50 call. */}
-        <div className="mt-2 h-10 overflow-hidden rounded-lg border border-base-700 bg-base-850">
-          {probability === null ? (
-            <div className="flex h-full items-center justify-center text-xs text-muted">
-              waiting for a scoreable tick
-            </div>
-          ) : (
-            <div
-              className="h-full bg-ct transition-[width] duration-300 ease-out"
-              style={{ width: `${probability * 100}%` }}
-            />
-          )}
-        </div>
-
-        <div className="tabular mt-2 flex justify-between text-sm">
-          <span className="text-ct">{percent === null ? "—" : `${percent.toFixed(1)}%`}</span>
-          <span className="text-t">
-            {percent === null ? "—" : `${(100 - percent).toFixed(1)}%`}
-          </span>
-        </div>
-      </section>
-
-      <section className="mt-8 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat
-          label="score"
-          value={snapshot ? `${snapshot.score.ct} – ${snapshot.score.t}` : "—"}
-        />
-        <Stat
-          label="round"
-          value={snapshot ? `${snapshot.round.number} · ${snapshot.round.phase}` : "—"}
-        />
-        <Stat
-          label="alive"
-          value={snapshot ? `${snapshot.ct.alive}v${snapshot.t.alive}` : "—"}
-        />
-        <Stat
-          label="latency"
-          value={prediction ? `${prediction.latency_ms.toFixed(2)} ms` : "—"}
-        />
-      </section>
-
-      <footer className="mt-8 flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted">
-        <span>frames {received}</span>
-        <span>rounds logged {rounds.length}</span>
-        <span>server {stream.serverVersion ?? "—"}</span>
-        <span>model {stream.modelLoaded ? "loaded" : "absent"}</span>
-      </footer>
-
-      {status !== "open" ? (
-        <p className="mt-6 rounded-lg border border-base-700 bg-base-850 p-4 text-sm text-muted">
+      {status !== "open" && snapshot === null ? (
+        <p className="mt-8 rounded-lg border border-base-700 bg-base-850 p-6 text-center text-sm text-muted">
           No connection. Start the API with{" "}
-          <code className="text-base-600">apexpulse serve --simulate</code> and this
-          page will reconnect on its own.
+          <code className="text-base-600">apexpulse serve --simulate</code> — this
+          page reconnects on its own.
         </p>
       ) : null}
+
+      {snapshot ? (
+        <>
+          {/* The question: where does the round stand, and how did it get here. */}
+          <section className="mt-6 grid gap-5 lg:grid-cols-[1fr_320px]">
+            <div className="space-y-4">
+              <ScoreBoard
+                score={snapshot.score}
+                round={snapshot.round}
+                mapName={snapshot.map_name}
+              />
+              <MomentumTimeline
+                history={history}
+                placeholder={
+                  snapshot.round.phase === "freezetime"
+                    ? "freezetime — no reading yet"
+                    : undefined
+                }
+              />
+            </div>
+
+            <div className="flex items-center justify-center rounded-lg border border-base-700 bg-base-850 p-5">
+              <WinProbabilityGauge
+                prediction={prediction}
+                phase={snapshot.round.phase.replace("_", " ")}
+              />
+            </div>
+          </section>
+
+          {/* The evidence: who is alive, and what they can afford. */}
+          <section className="mt-5 grid gap-5 lg:grid-cols-[1fr_320px]">
+            <PlayerGrid players={snapshot.players} />
+            <div className="space-y-5">
+              <EconomyTicker ct={snapshot.ct} t={snapshot.t} />
+              <EventLog rounds={rounds} finished={finished} />
+            </div>
+          </section>
+        </>
+      ) : null}
+
+      <footer className="mt-8 flex flex-wrap gap-x-6 gap-y-1 border-t border-base-800 pt-4 text-[0.7rem] text-muted">
+        <span>frames {stream.received}</span>
+        <span>server {stream.serverVersion ?? "—"}</span>
+        <span>model {stream.modelLoaded ? "loaded" : "absent"}</span>
+        {snapshot ? <span>tick {snapshot.sequence}</span> : null}
+      </footer>
     </main>
   );
 }
