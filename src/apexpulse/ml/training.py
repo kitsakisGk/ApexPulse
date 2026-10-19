@@ -79,7 +79,13 @@ metrics worse. Re-measure before turning it on.
 
 DEFAULT_PARAMS: dict[str, Any] = {
     "objective": "binary:logistic",
-    "eval_metric": ["logloss", "auc"],
+    # Order matters: XGBoost early-stops on the *last* metric listed. With AUC
+    # last, it stopped on AUC over a handful of held-out matches — a jumpy
+    # signal that sometimes peaked at tree two and ended training on a barely
+    # fitted model. Across twelve seeds on one dataset, three collapsed that way
+    # (best iteration 2, skill near zero in decided rounds); with log loss last,
+    # none did. Log loss is also the metric the model is judged on.
+    "eval_metric": ["auc", "logloss"],
     "max_depth": 5,
     "learning_rate": 0.08,
     "subsample": 0.8,
