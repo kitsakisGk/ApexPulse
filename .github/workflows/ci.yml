@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A new push to the same branch supersedes the previous run. Without this, a
+# series of quick commits queues up builds that are already obsolete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Keep the backend on its service-free backends in CI. The container stack is
+  # exercised separately; the test suite must not need it.
+  APEXPULSE_BROKER_BACKEND: memory
+  APEXPULSE_STATE_BACKEND: memory
+
+jobs:
+  backend:
+    name: backend · lint, types, tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --all-extras --frozen
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Type-check
+        run: uv run mypy
+
+      - name: Test
+        run: uv run pytest -q --cov=src/apexpulse --cov-report=term-missing
+
+      - name: Verify the CLI is wired up
+        # A passing suite does not prove the entry point works: a broken
+        # console script would import fine and still fail for a user.
+        run: |
+          uv run apexpulse version
+          uv run apexpulse doctor
+
+  frontend:
+    name: frontend · lint, types, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        # `npm ci` installs exactly the lockfile, so CI cannot drift from local.
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+  pipeline:
+    name: pipeline · end-to-end smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --all-extras --frozen
+
+      - name: Simulate a match
+        run: uv run apexpulse simulate --seed 7 --tick-rate 4
+
+      - name: Replay through the broker
+        # Proves producer, transport, and consumer still agree. A schema change
+        # that breaks the round trip passes the unit tests and fails here.
+        run: uv run apexpulse replay --seed 7 --tick-rate 4 --max-events 2000
+
+      - name: Generate a dataset and train
+        run: |
+          uv run apexpulse dataset --matches 6 --tick-rate 2
+          uv run apexpulse train --test-fraction 0.34
+
+      - name: Validate the trained model
+        run: uv run apexpulse validate --test-fraction 0.34
