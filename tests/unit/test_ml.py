@@ -42,8 +42,16 @@ async def build_dataset(matches: int = 8, tick_rate: float = 2.0):
 
 @pytest.fixture(scope="module")
 async def dataset():
-    """One dataset shared across the module; generation is the slow part."""
-    return await build_dataset()
+    """One dataset shared across the module; generation is the slow part.
+
+    Sixteen matches, not eight. With eight, the held-out set is two matches and
+    the quality assertions below were riding on them: measured across row
+    orderings, skill ranged from +0.068 to +0.097 against a 0.05 threshold, and
+    on CI the model stopped after a single tree. At sixteen the minimum across
+    orderings was +0.107, with AUC at least 0.72 and calibration error at most
+    0.081 — comfortable margins on every assertion that uses this fixture.
+    """
+    return await build_dataset(matches=16)
 
 
 # -- Metrics ------------------------------------------------------------------

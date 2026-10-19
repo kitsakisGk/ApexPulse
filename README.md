@@ -199,7 +199,7 @@ drawing an even split the model never made.
 ## Development
 
 ```bash
-uv run pytest            # 422 tests
+uv run pytest            # 425 tests
 uv run ruff check .      # lint
 uv run mypy              # strict type-checking
 make check               # all three
