@@ -442,3 +442,49 @@ async def test_migration_is_idempotent(tmp_path) -> None:
         await second.flush()
 
         assert second.count("ticks") == 2
+
+
+# -- Reproducibility ----------------------------------------------------------
+
+
+async def test_the_training_frame_is_sorted_by_match_and_sequence(sink) -> None:
+    for sequence in (5, 1, 3):
+        await sink.write_tick(make_tick(sequence, match_id="m-b"))
+        await sink.write_tick(make_tick(sequence, match_id="m-a"))
+    await sink.write_round(make_round(1, Team.CT, match_id="m-a"))
+    await sink.write_round(make_round(1, Team.T, match_id="m-b"))
+    await sink.flush()
+
+    frame = sink.training_frame()
+    keys = list(zip(frame["match_id"], frame["sequence"], strict=True))
+
+    assert keys == sorted(keys)
+
+
+@pytest.mark.parametrize("threads", [1, 4])
+async def test_the_training_frame_does_not_depend_on_thread_count(threads: int) -> None:
+    """Regression: DuckDB's parallel join returned rows in scheduling order.
+
+    XGBoost's subsample draws rows by index, so order changes the model — one
+    dataset moved from AUC 0.736 to 0.825 on reordering alone, and CI on Linux
+    trained a different model than Windows did on identical data.
+    """
+
+    async def frame_with(thread_count: int):
+        async with DuckDBSink(path=":memory:", settings=Settings(), batch_size=5_000) as sink:
+            sink._db.execute(f"SET threads = {thread_count}")
+            for seed in range(3):
+                simulator = MatchSimulator(
+                    match_id=f"m-{seed}", seed=seed, tick_rate_hz=2.0, start_time=BASE_TIME
+                )
+                for event in simulator.run():
+                    await sink.handle(event)
+            await sink.flush()
+            return sink.training_frame()
+
+    reference = await frame_with(1)
+    candidate = await frame_with(threads)
+
+    assert reference[["match_id", "sequence", "ct_won"]].equals(
+        candidate[["match_id", "sequence", "ct_won"]]
+    )

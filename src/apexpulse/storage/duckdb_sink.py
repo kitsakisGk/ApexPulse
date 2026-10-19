@@ -391,8 +391,16 @@ class DuckDBSink:
         return int(result[0]) if result else 0
 
     def training_frame(self) -> Any:
-        """Return the labelled training set as a pandas DataFrame."""
-        return self._db.execute("SELECT * FROM training_data").df()
+        """Return the labelled training set as a pandas DataFrame, in a fixed order.
+
+        The view joins ticks to rounds, and DuckDB's parallel join returns rows
+        in an order that depends on thread scheduling. Row order is not
+        cosmetic here: XGBoost's ``subsample`` draws rows by index, so the same
+        data in a different order trains a different model. Measured on one
+        dataset with one seed, reordering alone moved held-out AUC from 0.736 to
+        0.825. Sorting makes a training run reproducible across machines.
+        """
+        return self._db.execute("SELECT * FROM training_data ORDER BY match_id, sequence").df()
 
     def export_parquet(self, destination: Path | str, *, table: str = "training_data") -> Path:
         """Write ``table`` to a Parquet file and return its path."""
