@@ -85,3 +85,79 @@ def test_named_volumes_are_declared(compose: dict) -> None:
 
 def test_wait_script_is_present() -> None:
     assert Path(PROJECT_ROOT / "scripts" / "wait_for_services.py").is_file()
+
+
+# -- Application services -----------------------------------------------------
+
+
+def _healthcheck_source(compose: dict, service: str) -> str | None:
+    """Return where ``service``'s healthcheck is defined, or None if nowhere.
+
+    Compose honours a HEALTHCHECK baked into an image, so a healthcheck can live
+    in either place. Both count; neither means `service_healthy` waits forever.
+    """
+    definition = compose["services"][service]
+    if "healthcheck" in definition:
+        return "compose"
+    build = definition.get("build")
+    if isinstance(build, dict) and "dockerfile" in build:
+        dockerfile = (PROJECT_ROOT / build["dockerfile"]).read_text(encoding="utf-8")
+        if "HEALTHCHECK" in dockerfile:
+            return "dockerfile"
+    return None
+
+
+def test_application_services_are_declared(compose: dict) -> None:
+    assert {"api", "frontend"} <= set(compose["services"])
+
+
+def test_every_healthy_dependency_can_report_health(compose: dict) -> None:
+    """A `service_healthy` wait on a service with no healthcheck never resolves."""
+    for name, service in compose["services"].items():
+        for dependency, condition in (service.get("depends_on") or {}).items():
+            if condition.get("condition") == "service_healthy":
+                assert _healthcheck_source(compose, dependency), (
+                    f"{name} waits for {dependency} to be healthy, "
+                    f"but {dependency} defines no healthcheck"
+                )
+
+
+def test_the_api_reaches_infrastructure_by_service_name(compose: dict) -> None:
+    """Inside the network, localhost is the container itself, not the broker."""
+    environment = compose["services"]["api"]["environment"]
+
+    assert environment["APEXPULSE_BROKER_BACKEND"] == "kafka"
+    assert environment["APEXPULSE_STATE_BACKEND"] == "redis"
+    assert environment["APEXPULSE_KAFKA_BOOTSTRAP_SERVERS"].startswith("redpanda:")
+    assert "redis:6379" in environment["APEXPULSE_REDIS_URL"]
+
+
+def test_the_dashboard_points_the_browser_at_a_host_address(compose: dict) -> None:
+    """NEXT_PUBLIC_* run in the viewer's browser, where `api` does not resolve."""
+    args = compose["services"]["frontend"]["build"]["args"]
+
+    for key in ("NEXT_PUBLIC_API_URL", "NEXT_PUBLIC_WS_URL"):
+        assert "localhost" in args[key], f"{key} must be reachable from the browser"
+        assert "//api" not in args[key]
+
+
+def test_the_api_healthcheck_does_not_require_a_model() -> None:
+    """/health is 503 without a checkpoint; probing it would restart-loop the API."""
+    dockerfile = (PROJECT_ROOT / "docker" / "api.Dockerfile").read_text(encoding="utf-8")
+    healthcheck = dockerfile[dockerfile.index("HEALTHCHECK") :]
+
+    assert "/ready" in healthcheck
+    assert "/health" not in healthcheck.split("CMD", 1)[1].splitlines()[0]
+
+
+def test_model_checkpoints_are_mounted_read_only(compose: dict) -> None:
+    volumes = compose["services"]["api"]["volumes"]
+
+    assert any(volume.endswith("/app/models:ro") for volume in volumes)
+
+
+def test_the_build_context_excludes_heavy_directories() -> None:
+    ignored = (PROJECT_ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+
+    for path in (".venv", "frontend/node_modules", "data", ".git"):
+        assert path in ignored, f"{path} would be shipped into every build context"
